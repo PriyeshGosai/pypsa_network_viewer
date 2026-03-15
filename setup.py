@@ -9,7 +9,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="pypsa-network-viewer",
-    version="0.1.0",
+    version="0.2.0",
     author="Priyesh Gosai",
     description="Interactive HTML viewer for PyPSA networks",
     long_description=long_description,

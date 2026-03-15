@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(dir)",
+      "Bash(copy pypsa_network_viewer.py pypsa_network_viewerviewer_updated.py)",
+      "Bash(rm basic.html test_basic.html test_constraints.html test_custom_plots.html test_summary.html example_old.ipynb test_viewer.ipynb excel_template_generator_v2.py pypsa_network_viewer.py)",
+      "Bash(rm -rf output/ test_output/ pypsa_network_viewer/__pycache__/)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
