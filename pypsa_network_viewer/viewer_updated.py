@@ -10,6 +10,7 @@ import json
 import os
 import sys
 
+import pandas as pd
 import pypsa
 
 _PYPSA_MAJOR = int(pypsa.__version__.split('.')[0])
@@ -299,6 +300,12 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         </div>
 
         <div class="controls-section">
+            <div class="control-group" id="yearGroup" style="display:none;">
+                <label class="control-label">Investment Period</label>
+                <select id="yearSelect">
+                    <option value="">All Periods</option>
+                </select>
+            </div>
             <div class="control-group">
                 <button onclick="loadData()" id="loadButton" disabled>Load Data</button>
             </div>
@@ -334,12 +341,26 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
             populateNetworkSummary();
             populateComponentTypes();
             setupEventListeners();
+            if (networkData.summary.is_multi_index) {{
+                const yearGroup = document.getElementById('yearGroup');
+                yearGroup.style.display = 'flex';
+                const yearSelect = document.getElementById('yearSelect');
+                networkData.summary.periods.forEach(p => {{
+                    const opt = document.createElement('option');
+                    opt.value = p;
+                    opt.textContent = p;
+                    yearSelect.appendChild(opt);
+                }});
+                if (networkData.summary.periods.length > 0) {{
+                    yearSelect.value = networkData.summary.periods[0];
+                }}
+            }}
         }});
 
         function populateNetworkSummary() {{
             const summaryDiv = document.getElementById('networkSummary');
             const summary = networkData.summary;
-            const skip = new Set(['network_info', 'global_constraints', 'custom_plots']);
+            const skip = new Set(['network_info', 'global_constraints', 'custom_plots', 'is_multi_index', 'periods', 'period_index']);
 
             let html = '';
             Object.entries(summary).forEach(([key, value]) => {{
@@ -385,6 +406,11 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
         function setupEventListeners() {{
             document.getElementById('componentTypeSelect').addEventListener('change', onComponentTypeChange);
             document.getElementById('dataTypeSelect').addEventListener('change', onDataTypeChange);
+            document.getElementById('yearSelect').addEventListener('change', function() {{
+                if (currentData && currentData.type === 'timeseries') {{
+                    displayTimeseriesData(currentData.componentType, currentData.timeseriesName);
+                }}
+            }});
         }}
 
         function onComponentTypeChange() {{
@@ -564,21 +590,39 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
                 return;
             }}
 
+            // Multi-index: filter by selected investment period
+            let timeIndex = data.time_index.map(t => new Date(t));
+            let seriesData = data.data;
+            let periodLabel = '';
+
+            if (networkData.summary.is_multi_index) {{
+                const selectedPeriod = document.getElementById('yearSelect').value;
+                if (selectedPeriod) {{
+                    const periodIdx = networkData.summary.period_index;
+                    const mask = periodIdx.map(p => p === selectedPeriod);
+                    timeIndex = timeIndex.filter((_, i) => mask[i]);
+                    seriesData = {{}};
+                    Object.entries(data.data).forEach(([name, values]) => {{
+                        seriesData[name] = values.filter((_, i) => mask[i]);
+                    }});
+                    periodLabel = ` — Period: ${{selectedPeriod}}`;
+                }}
+            }}
+
             contentDiv.innerHTML = `
                 <div class="info-panel">
-                    <h3>${{componentType.charAt(0).toUpperCase() + componentType.slice(1)}} - ${{timeseriesName}}</h3>
+                    <h3>${{componentType.charAt(0).toUpperCase() + componentType.slice(1)}} - ${{timeseriesName}}${{periodLabel}}</h3>
                     <p><strong>Time Range:</strong> ${{data.time_range.start}} to ${{data.time_range.end}}</p>
-                    <p><strong>Series:</strong> ${{Object.keys(data.data).length}} with ${{data.time_range.periods}} time periods</p>
+                    <p><strong>Series:</strong> ${{Object.keys(data.data).length}} with ${{timeIndex.length}} time steps shown</p>
                 </div>
                 <div class="plot-container"><div id="timeseriesPlot" style="width:100%;height:600px;"></div></div>`;
 
-            const timeIndex = data.time_index.map(t => new Date(t));
-            const traces = Object.entries(data.data).map(([name, values]) => ({{
+            const traces = Object.entries(seriesData).map(([name, values]) => ({{
                 x: timeIndex, y: values, type: 'scatter', mode: 'lines', name, line: {{ width: 2 }}
             }}));
 
             Plotly.newPlot('timeseriesPlot', traces, {{
-                title: `${{componentType}} - ${{timeseriesName}}`,
+                title: `${{componentType}} - ${{timeseriesName}}${{periodLabel}}`,
                 xaxis: {{ title: 'Time', type: 'date' }},
                 yaxis: {{ title: data.unit || 'Value' }},
                 hovermode: 'x unified',
@@ -659,6 +703,32 @@ def _extract_component_info(network, currency='$', custom_plots=None):
         'custom_plots': {}
     }
 
+    # --- Snapshot / multi-index detection ----------------------------------
+    is_multi_index = isinstance(network.snapshots, pd.MultiIndex)
+    if is_multi_index:
+        ts_level = network.snapshots.get_level_values(1)
+        try:
+            snapshot_time_index = ts_level.strftime('%Y-%m-%d %H:%M:%S').tolist()
+        except AttributeError:
+            snapshot_time_index = [str(t) for t in ts_level]
+        period_values = network.snapshots.get_level_values(0)
+        snapshot_period_index = [str(p) for p in period_values]
+        periods = [str(p) for p in period_values.unique()]
+        snapshot_time_range = {
+            'start': str(ts_level[0]),
+            'end': str(ts_level[-1]),
+            'periods': len(network.snapshots)
+        }
+    else:
+        snapshot_time_index = network.snapshots.strftime('%Y-%m-%d %H:%M:%S').tolist()
+        snapshot_period_index = None
+        periods = None
+        snapshot_time_range = {
+            'start': str(network.snapshots[0]),
+            'end': str(network.snapshots[-1]),
+            'periods': len(network.snapshots)
+        }
+
     # --- Dynamic component discovery via new PyPSA API ---------------------
     for comp_name, comp in network.components.items():
         static_df = comp.static
@@ -689,16 +759,16 @@ def _extract_component_info(network, currency='$', custom_plots=None):
 
             component_info['components'][comp_name]['timeseries'][attr_name] = {
                 'data': ts_data,
-                'time_index': network.snapshots.strftime('%Y-%m-%d %H:%M:%S').tolist(),
-                'time_range': {
-                    'start': str(network.snapshots[0]),
-                    'end': str(network.snapshots[-1]),
-                    'periods': len(network.snapshots)
-                },
+                'time_index': snapshot_time_index,
+                'time_range': snapshot_time_range,
                 'unit': unit
             }
 
     component_info['summary']['snapshots'] = len(network.snapshots)
+    component_info['summary']['is_multi_index'] = is_multi_index
+    if is_multi_index:
+        component_info['summary']['periods'] = periods
+        component_info['summary']['period_index'] = snapshot_period_index
 
     # --- Network metadata --------------------------------------------------
     network_info = {
