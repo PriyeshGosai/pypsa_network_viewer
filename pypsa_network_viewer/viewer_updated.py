@@ -663,6 +663,31 @@ def html_network(network, file_path=None, file_name=None, title="PyPSA Network A
     return output_file
 
 
+def _decode_binary_arrays(obj):
+    """
+    Recursively decode Plotly 6.x binary-encoded arrays ({dtype, bdata}) back
+    to plain Python lists so they serialise correctly in all Plotly.js versions.
+    """
+    import base64
+    import numpy as np
+
+    _dtype_map = {
+        "f8": "<f8", "f4": "<f4",
+        "i1": "<i1", "u1": "<u1",
+        "i2": "<i2", "u2": "<u2",
+        "i4": "<i4", "u4": "<u4",
+    }
+    if isinstance(obj, dict):
+        if "bdata" in obj and "dtype" in obj:
+            raw = base64.b64decode(obj["bdata"])
+            dt = _dtype_map.get(obj["dtype"], "<f8")
+            return np.frombuffer(raw, dtype=dt).tolist()
+        return {k: _decode_binary_arrays(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_decode_binary_arrays(v) for v in obj]
+    return obj
+
+
 def _load_custom_plots_from_file(file_path, network):
     """
     Dynamically import a custom plots Python file and call its ``get_plots(network)`` function.
@@ -820,7 +845,7 @@ def _extract_component_info(network, currency='$', custom_plots=None):
                 else f"Plot {i + 1}"
             )
             plot_names.append(title_text)
-            fig_dict = _json.loads(pio.to_json(fig))
+            fig_dict = _decode_binary_arrays(_json.loads(pio.to_json(fig)))
             component_info['custom_plots'][title_text] = {
                 'data': fig_dict['data'],
                 'layout': fig_dict['layout']
