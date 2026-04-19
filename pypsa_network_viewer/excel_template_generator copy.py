@@ -32,7 +32,6 @@ _SNAPSHOT_WEIGHTINGS = {
 }
 
 _TWO_BUS_COMPONENTS = {'lines', 'transformers'}
-_TYPE_SHEET_MAP     = {'lines': 'line_types', 'transformers': 'transformer_types'}
 _BUS_DV_SKIP        = {'global_constraints'}
 
 _INSTRUCTIONS = [
@@ -42,29 +41,27 @@ _INSTRUCTIONS = [
     "",
     "1. snapshots: Contains the time series data points generated with the specified resolution.",
     "",
-    "2. Component sheets (e.g. buses, carriers, generators, loads):",
+    "2. options: Lists all available Input variables per component (bus/carrier fields excluded).",
+    "",
+    "3. Component sheets (e.g. buses, carriers, generators, loads):",
     "   - Column A: enter component names (row 2 onwards).",
     "   - Carrier column (if any): dropdown linked to the carriers sheet.",
     "   - Bus columns (if any): dropdown linked to the buses sheet.",
     "   - Remaining columns in row 1: dropdown to pick variables from the options list.",
     "     Select a variable, then fill values in the rows below it.",
     "",
-    "3. Dynamic variable sheets (e.g. generators-p_max_pu):",
+    "4. Dynamic variable sheets (e.g. generators-p_max_pu):",
     "   - Column A: snapshot index (1, 2, 3, …).",
     "   - Row 1 (B1 onwards): select component names via dropdown.",
     "   - Fill time-varying values below each selected name.",
     "",
-    "4. For links with multiple outputs, bus2/bus3/… and efficiency2/efficiency3/… ",
+    "5. For links with multiple outputs, bus2/bus3/… and efficiency2/efficiency3/… ",
     "   are included automatically based on the link_outputs setting.",
     "",
-    "5. For processes with multiple ports, bus0/bus1/… and rate0/rate1/… ",
+    "6. For processes with multiple ports, bus0/bus1/… and rate0/rate1/… ",
     "   are included automatically based on the process_outputs setting.",
     "",
-    "6. Hidden sheets can be made visible via Excel's 'Unhide Sheet' option.",
-    "   - transformer and line types give the available options for standard lines and transformers.",
-    "   - Additional components such as lines, transformers, global_constraints, etc. are hidden by default.",
-    "   - All time series related sheets are hidden by default.",
-    "   - Some timeseries sheet names are truncated and will not work correctly."
+    "7. Hidden sheets can be made visible via Excel's 'Unhide Sheet' option."
 ]
 
 
@@ -143,7 +140,7 @@ def _hard_bus_fields(comp_name, link_outputs, process_outputs):
     if comp_name == 'processes':
         return {'name', 'carrier'} | {f'bus{i}' for i in range(process_outputs + 1)}
     if comp_name in _TWO_BUS_COMPONENTS:
-        return {'name', 'carrier', 'bus0', 'bus1', 'type'}
+        return {'name', 'carrier', 'bus0', 'bus1'}
     return {'name', 'carrier', 'bus'} if comp_name not in _BUS_DV_SKIP else {'name', 'carrier'}
 
 
@@ -152,8 +149,6 @@ def _collect_component_data(link_outputs, process_outputs):
     component_data = {}
 
     for comp_name in n.components.keys():
-        if comp_name in _TYPE_SHEET_MAP.values():
-            continue
         comp     = n.components[comp_name]
         defaults = comp.defaults
 
@@ -217,17 +212,6 @@ def _add_carrier_dv(ws, col_idx, start_row=2, end_row=1000):
     dv.add(f"{col_letter}{start_row}:{col_letter}{end_row}")
 
 
-def _add_type_dv(ws, col_idx, type_sheet, start_row=2, end_row=1000):
-    dv = DataValidation(type="list",
-                        formula1=f"'{type_sheet}'!$A$2:$A$1000",
-                        allow_blank=True)
-    dv.error      = f'Please select a valid type from the {type_sheet} sheet'
-    dv.errorTitle = 'Invalid Entry'
-    ws.add_data_validation(dv)
-    col_letter = get_column_letter(col_idx)
-    dv.add(f"{col_letter}{start_row}:{col_letter}{end_row}")
-
-
 def _add_var_dv(ws, options_col_letter, options_last_row, first_col, last_col=100):
     dv = DataValidation(type="list",
                         formula1=f"'options'!${options_col_letter}$3:${options_col_letter}${options_last_row}",
@@ -243,25 +227,6 @@ def _add_var_dv(ws, options_col_letter, options_last_row, first_col, last_col=10
 # ---------------------------------------------------------------------------
 # Sheet writers
 # ---------------------------------------------------------------------------
-
-def _write_type_sheets(wb, n):
-    for attr, sheet_name in [('line_types', 'line_types'), ('transformer_types', 'transformer_types')]:
-        try:
-            df = getattr(n, attr).static
-        except AttributeError:
-            continue
-        ws = wb.create_sheet(sheet_name)
-        # Row 1: headers — index name in col A, then all column names
-        ws.cell(row=1, column=1, value='name')
-        for col_idx, col_name in enumerate(df.columns, 2):
-            ws.cell(row=1, column=col_idx, value=col_name)
-        # Row 2+: data — index value in col A, then all column values
-        for row_idx, (idx_val, row) in enumerate(df.iterrows(), 2):
-            ws.cell(row=row_idx, column=1, value=idx_val)
-            for col_idx, val in enumerate(row, 2):
-                ws.cell(row=row_idx, column=col_idx, value=val)
-        ws.sheet_state = 'hidden'
-
 
 def _write_instructions(wb):
     ws = wb.create_sheet('instructions', 0)
@@ -290,7 +255,6 @@ def _write_snapshots(wb, timestamps, resolution_str):
 
 def _write_options(wb, component_data):
     ws = wb.create_sheet('options')
-    ws.sheet_state = 'hidden'
     options_col_map = {}
 
     col = 1
@@ -313,17 +277,19 @@ def _write_options(wb, component_data):
 def _write_component_sheets(wb, n, component_data, options_col_map, link_outputs, process_outputs):
     visible_sheets = {'instructions', 'network', 'snapshots', 'buses', 'carriers', 'generators', 'loads', 'links'}
 
+    # Add processes to visible sheets if it exists in the network
+    if 'processes' in n.components.keys():
+        visible_sheets.add('processes')
+
     for comp_name in n.components.keys():
-        if comp_name in _TYPE_SHEET_MAP.values():
-            continue
         ws         = wb.create_sheet(comp_name)
         input_vars = component_data[comp_name]['input_vars']
 
         ws['A1'] = 'Name'
         col = 2
 
-        # Add carrier column if carrier is in input_vars (transformers use type instead)
-        if 'carrier' in input_vars and comp_name != 'transformers':
+        # Add carrier column if carrier is in input_vars
+        if 'carrier' in input_vars:
             ws.cell(row=1, column=col, value='carrier')
             _add_carrier_dv(ws, col)
             col += 1
@@ -345,9 +311,6 @@ def _write_component_sheets(wb, n, component_data, options_col_map, link_outputs
                 ws.cell(row=1, column=col, value=f'bus{bus_idx}')
                 _add_bus_dv(ws, col)
                 col += 1
-            ws.cell(row=1, column=col, value='type')
-            _add_type_dv(ws, col, _TYPE_SHEET_MAP[comp_name])
-            col += 1
 
         elif 'bus' in input_vars and comp_name not in _BUS_DV_SKIP:
             ws.cell(row=1, column=col, value='bus')
@@ -363,8 +326,6 @@ def _write_component_sheets(wb, n, component_data, options_col_map, link_outputs
 
 def _write_dynamic_sheets(wb, n, component_data, timestamps):
     for comp_name in n.components.keys():
-        if comp_name in _TYPE_SHEET_MAP.values():
-            continue
         for dyn_var in component_data[comp_name]['dynamic_input_vars']:
             sheet_name = f'{comp_name}-{dyn_var}'[:31]
 
@@ -468,7 +429,6 @@ def generate_template(
     _write_instructions(wb)
     _write_network(wb, pypsa_version)
     _write_snapshots(wb, timestamps, resolution_str)
-    _write_type_sheets(wb, n)
     options_col_map = _write_options(wb, component_data)
     _write_component_sheets(wb, n, component_data, options_col_map, link_outputs, process_outputs)
     _write_dynamic_sheets(wb, n, component_data, timestamps)
